@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-#define BUFFER_SIZE 512
+#define BUFFER_SIZE 4096
 
 
 int main(int argc, char *argv[])
@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
 		close(fd);
 		return 1;
 	} 
-	printf("--- %s ---\n\n%s", struct_name, buf);
+	printf("--- PID=%d STRUCT=%s ---\n\n%s", pid, struct_name, buf);
 
 	close(fd);
 
