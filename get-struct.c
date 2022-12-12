@@ -5,7 +5,19 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 512
+
+
+static struct user_page {
+        unsigned long flags;
+        unsigned long vm_start;
+};
+
+static struct user_vm_area_struct {
+        unsigned long flags;
+        unsigned long vm_start;
+        unsigned long vm_end;
+};
 
 
 int main(int argc, char *argv[])
@@ -18,6 +30,9 @@ int main(int argc, char *argv[])
 	int pid = atoi(argv[1]);
 	char *struct_name = argv[2];
 	int struct_id;
+
+	struct user_page upage;
+	struct user_vm_area_struct uvm_area_struct;
 
 	if (pid == 0 && !isdigit(argv[1][0])) {
 		fprintf(stderr, "{pid} should be a number\n");
@@ -52,8 +67,20 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Reading from fd=%d failed\n", fd);
 		close(fd);
 		return 1;
-	} 
-	printf("--- PID=%d STRUCT=%s ---\n\n%s", pid, struct_name, buf);
+	}
+
+
+	printf("--- PID=%d STRUCT=%s ---\n\n", pid, struct_name);
+
+	if (struct_id == 0) {
+		memcpy(&upage, buf, sizeof(upage));
+		printf("flags = %lu  vm_start = %lu\n", upage.flags, upage.vm_start);
+	}
+	else if (struct_id == 1) {
+		memcpy(&uvm_area_struct, buf, sizeof(uvm_area_struct));
+		printf("flags = %lu  vm_start = %lu  vm_end = %lu\n",
+			 uvm_area_struct.flags, uvm_area_struct.vm_start, uvm_area_struct.vm_end);
+	}
 
 	close(fd);
 

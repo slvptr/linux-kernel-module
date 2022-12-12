@@ -11,15 +11,29 @@
 #include <linux/pid.h>
 #include <linux/slab.h>
 
+
 #define PROCFS_ENTRY_NAME "my_module"
-#define KBUF_SIZE 4096
+#define KBUF_SIZE 512
 
 
-static struct proc_dir_entry *proc_dir_entry;
 
 static int pid = 0;
 static int struct_id = 0;
 
+static struct proc_dir_entry *proc_dir_entry;
+
+
+
+static struct user_page {
+	unsigned long flags;
+	unsigned long vm_start;
+};
+
+static struct user_vm_area_struct {
+	unsigned long flags;
+	unsigned long vm_start;
+	unsigned long vm_end;
+};
 
 static struct page *vaddr2ppage(struct mm_struct *mm, unsigned long vaddr)
 {
@@ -59,76 +73,67 @@ static struct page *vaddr2ppage(struct mm_struct *mm, unsigned long vaddr)
 }
 
 
+
 static ssize_t copy2buf_page(char __user *ubuf, struct mm_struct *mm_struct)
 {
 	char *kbuf = kmalloc(KBUF_SIZE, GFP_KERNEL);
-        ssize_t entry_size = 0, actual_kbuf_size = 0;
 	struct page *page;
         unsigned long nbytes;
+	
+	struct user_page upage;
 	
 	struct vm_area_struct *vm_area_struct = mm_struct->mmap;
 	unsigned long vm_start = vm_area_struct->vm_start;
 	unsigned long vm_end = vm_area_struct->vm_end;
 
+
+
 	while (vm_start < vm_end) {
-		if (actual_kbuf_size >= KBUF_SIZE - entry_size*2)
-			break;
 		page = vaddr2ppage(mm_struct, vm_start);
 		if (page != NULL) {
-			actual_kbuf_size += sprintf(kbuf + actual_kbuf_size, 
-				"{vm_flags=%lu vm_start=%lu}\n", page->flags, vm_start);
-			if (!entry_size)
-				entry_size = actual_kbuf_size;
+			upage.flags = page->flags;
+			upage.vm_start = vm_start;
+			break;
 		}
 		vm_start += PAGE_SIZE;
 	}
 
-	if (actual_kbuf_size >= KBUF_SIZE - entry_size*2) {
-		actual_kbuf_size += sprintf(kbuf + actual_kbuf_size, "... (buffer is over)\n");
-	}
 	
-	nbytes = copy_to_user(ubuf, kbuf, actual_kbuf_size);
+	memcpy(kbuf, &upage, sizeof(upage));
+	nbytes = copy_to_user(ubuf, kbuf, sizeof(upage));
 	if (nbytes) {
+		kfree(kbuf);
 		printk("copy2buf_page: copy_to_user can't copy %lu bytes\n", nbytes);
 		return 0;
 	}
 
-	return actual_kbuf_size;
+	kfree(kbuf);
+	return sizeof(upage);
 }
 
 
 static ssize_t copy2buf_vm_area_struct(char __user *ubuf, struct mm_struct *mm_struct)
 {
 	char *kbuf = kmalloc(KBUF_SIZE, GFP_KERNEL);
-	ssize_t entry_size = 0, actual_kbuf_size = 0;
 	unsigned long nbytes;
+	struct user_vm_area_struct uvm_area_struct;
 
 	struct vm_area_struct *vm_area_struct = mm_struct->mmap;
-	actual_kbuf_size += sprintf(kbuf, "{vm_flags=%lu vm_start=%lu vm_end=%lu}\n",
-		vm_area_struct->vm_flags,
-		vm_area_struct->vm_start,
-		vm_area_struct->vm_end);
-	entry_size = actual_kbuf_size;
 
-	while (vm_area_struct->vm_next && actual_kbuf_size < KBUF_SIZE - entry_size*2) {
-		vm_area_struct = vm_area_struct->vm_next;
-		actual_kbuf_size += sprintf(kbuf + actual_kbuf_size,
-			 "{vm_flags=%lu vm_start=%lu vm_end=%lu}\n",
-			vm_area_struct->vm_flags,
-			vm_area_struct->vm_start,
-			vm_area_struct->vm_end);
-	}
-	if (actual_kbuf_size >= KBUF_SIZE - entry_size*2) {
-		actual_kbuf_size += sprintf(kbuf + actual_kbuf_size, "... (buffer is over)\n");
-	}
-	
-	nbytes = copy_to_user(ubuf, kbuf, actual_kbuf_size);
+	uvm_area_struct.flags = vm_area_struct->vm_flags;
+	uvm_area_struct.vm_start = vm_area_struct->vm_start;
+	uvm_area_struct.vm_end = vm_area_struct->vm_end;
+
+	memcpy(kbuf, &uvm_area_struct, sizeof(uvm_area_struct));
+	nbytes = copy_to_user(ubuf, kbuf, sizeof(uvm_area_struct));
 	if (nbytes) {
+		kfree(kbuf);
 		printk("copy2buf_vm_area_struct: copy_to_user can't copy %lu bytes\n", nbytes);
 		return 0;
 	}
-
-	return actual_kbuf_size;
+	
+	kfree(kbuf);
+	return sizeof(uvm_area_struct);
 }
 
 
@@ -146,6 +151,7 @@ static ssize_t proc_read(struct file *file, char __user *ubuf, size_t ubuf_size,
 		printk(KERN_INFO "Process with pid=%d doesn't exist\n", pid);
 		actual_kbuf_size = sprintf(kbuf, "Process with pid=%d doesn't exist\n", pid);
 		copy_to_user(ubuf, kbuf, actual_kbuf_size);
+		kfree(kbuf);
 		return actual_kbuf_size;
 	}
 
@@ -154,6 +160,7 @@ static ssize_t proc_read(struct file *file, char __user *ubuf, size_t ubuf_size,
 		printk(KERN_INFO "Failed to get task_struct with pid=%d\n", pid);
 		actual_kbuf_size = sprintf(kbuf, "Failed to get task_struct with pid=%d\n", pid);
 		copy_to_user(ubuf, kbuf, actual_kbuf_size);
+		kfree(kbuf);
 		return actual_kbuf_size;
 	}
 
@@ -162,6 +169,7 @@ static ssize_t proc_read(struct file *file, char __user *ubuf, size_t ubuf_size,
 		printk(KERN_INFO "mm_struct is NULL | pid=%d\n", pid);
                 actual_kbuf_size = sprintf(kbuf, "mm_struct is NULL | pid=%d\n", pid);
                 copy_to_user(ubuf, kbuf, actual_kbuf_size);
+		kfree(kbuf);
                 return actual_kbuf_size;
 	}
 	
@@ -170,6 +178,7 @@ static ssize_t proc_read(struct file *file, char __user *ubuf, size_t ubuf_size,
 	else if (struct_id == 1)
 		actual_kbuf_size = copy2buf_vm_area_struct(ubuf, mm_struct);
 
+	kfree(kbuf);
 	return actual_kbuf_size;
 }
 
@@ -182,6 +191,7 @@ static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t ubu
 	unsigned long nbytes = copy_from_user(kbuf, ubuf, ubuf_len);
 	if (nbytes) {
 		printk("proc_write: copy_from_user can't copy %lu bytes\n", nbytes);
+		kfree(kbuf);
 		return 0;
 	}
 	printk(KERN_INFO "proc_write: write %zu bytes\n", ubuf_len);
@@ -196,6 +206,7 @@ static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t ubu
 		printk(KERN_INFO "sscanf failed: %d argument(s) have been read", args_num);
 	}
 	
+	kfree(kbuf);
 	return ubuf_len;
 }
 
